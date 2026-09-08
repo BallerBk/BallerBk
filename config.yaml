@@ -12,6 +12,7 @@ universe:
   - META
   - GOOGL
   - AMD
+  - ORCL
 
 # Any subset/order of: trend_pullback, momentum_breakout, range_reversion, iv_rank_premium
 strategies:
