@@ -29,7 +29,7 @@ risk_pct_per_trade: 2.0        # % of account risked per trade (used to size con
 # than once a day adds noise, not edge, for this rule set.
 scan_cadence: once_daily_after_close   # once_daily_after_close | once_daily_before_open
 
-backtest_lookback_years: 3
+backtest_lookback_years: 5
 
 # "synthetic" works with zero setup (validates the engine, not real edge).
 # Switch to "yfinance" once you run this outside the sandbox for real data,
