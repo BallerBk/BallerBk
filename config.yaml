@@ -1,0 +1,40 @@
+# Options System configuration.
+# Edit this file to change your ticker universe, active strategies, and risk settings.
+
+universe:
+  - SPY
+  - QQQ
+  - AAPL
+  - MSFT
+  - NVDA
+  - AMZN
+  - TSLA
+  - META
+  - GOOGL
+  - AMD
+
+# Any subset/order of: trend_pullback, momentum_breakout, range_reversion, iv_rank_premium
+strategies:
+  - trend_pullback
+  - momentum_breakout
+  - range_reversion
+  - iv_rank_premium
+
+account_size: 10000
+risk_pct_per_trade: 2.0        # % of account risked per trade (used to size contract count)
+
+# How often the scanner should be run. These strategies are all built on daily
+# bars and DTE horizons of 30-45 days (matching the published cadence of the
+# premium-selling/swing research they're based on) -- running the scan more
+# than once a day adds noise, not edge, for this rule set.
+scan_cadence: once_daily_after_close   # once_daily_after_close | once_daily_before_open
+
+backtest_lookback_years: 3
+
+# "synthetic" works with zero setup (validates the engine, not real edge).
+# Switch to "yfinance" once you run this outside the sandbox for real data,
+# or "csv" to point at your own exported history.
+data_provider: synthetic
+csv_data_dir: data
+
+risk_free_rate: 0.045

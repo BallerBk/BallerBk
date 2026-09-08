@@ -1,0 +1,171 @@
+//@version=5
+// Multi-Strategy Options Signal Indicator
+// -----------------------------------------------------------------------
+// TradingView companion to the options_system Python package in this repo.
+// Mirrors the same four public/generic technical setups the Python
+// strategy modules implement (see options_system/strategies/*.py for the
+// full rationale + sources on each):
+//   1. Trend Pullback Continuation
+//   2. Momentum Breakout (volume-confirmed)
+//   3. Range / Support-Resistance Mean Reversion
+//   4. IV-Rank Premium Selling (realized-vol-rank proxy, tastytrade-style)
+//
+// This indicator only plots signals and fires alerts -- it does not place
+// trades and cannot see the options chain (TradingView has no options data
+// for retail script access). For a concrete call/put/spread + strike/DTE
+// recommendation, run this repo's `python -m options_system.cli scan`
+// alongside it; use this script for live chart visualization and alerts
+// on the underlying.
+// -----------------------------------------------------------------------
+indicator("Options System: Multi-Strategy Signals", overlay=true, max_labels_count=500)
+
+// ---------------- Strategy selector ----------------
+strategyMode = input.string(
+     "All", title="Strategy", options=["All", "Trend Pullback", "Momentum Breakout", "Range Reversion", "IV Rank Premium"],
+     group="Strategy Selection", tooltip="Choose which strategy's signals to plot. 'All' overlays every strategy at once.")
+
+// ---------------- Shared indicator settings ----------------
+grpShared = "Shared Indicators"
+fastLen   = input.int(21, "Fast EMA length", group=grpShared)
+slowLen   = input.int(50, "Slow EMA length", group=grpShared)
+rsiLen    = input.int(14, "RSI length", group=grpShared)
+atrLen    = input.int(14, "ATR length", group=grpShared)
+
+// ---------------- Trend Pullback settings ----------------
+grpTP = "Trend Pullback"
+tpRsiLow          = input.float(40, "RSI lower bound", group=grpTP)
+tpRsiHigh         = input.float(60, "RSI upper bound", group=grpTP)
+tpPullbackAtrMult = input.float(1.0, "Pullback distance (x ATR)", group=grpTP)
+tpStopAtrMult     = input.float(1.5, "Stop distance (x ATR)", group=grpTP)
+tpTargetRMult     = input.float(2.0, "Target R multiple", group=grpTP)
+
+// ---------------- Momentum Breakout settings ----------------
+grpMB = "Momentum Breakout"
+mbChannelLen = input.int(20, "Donchian channel length", group=grpMB)
+mbVolLen     = input.int(20, "Volume average length", group=grpMB)
+mbVolMult    = input.float(1.2, "Volume confirmation multiple", group=grpMB)
+
+// ---------------- Range Reversion settings ----------------
+grpRR = "Range Reversion"
+rrBbLen      = input.int(20, "Bollinger Band length", group=grpRR)
+rrBbStd      = input.float(2.0, "Bollinger Band std dev", group=grpRR)
+rrTrendLen   = input.int(50, "Trend filter EMA length", group=grpRR)
+rrFlatSlope  = input.float(0.15, "Max EMA slope %% (range filter)", group=grpRR) / 100
+
+// ---------------- IV Rank Premium settings ----------------
+grpIV = "IV Rank Premium"
+ivVolLen     = input.int(20, "Realized-vol length", group=grpIV)
+ivRankLen    = input.int(252, "IV-rank proxy lookback (bars)", group=grpIV)
+ivThreshold  = input.float(50, "IV Rank proxy threshold", group=grpIV)
+
+// ================= Shared indicators =================
+fastEma = ta.ema(close, fastLen)
+slowEma = ta.ema(close, slowLen)
+rsiV    = ta.rsi(close, rsiLen)
+atrV    = ta.atr(atrLen)
+
+showTP = strategyMode == "All" or strategyMode == "Trend Pullback"
+showMB = strategyMode == "All" or strategyMode == "Momentum Breakout"
+showRR = strategyMode == "All" or strategyMode == "Range Reversion"
+showIV = strategyMode == "All" or strategyMode == "IV Rank Premium"
+
+plot(showTP or showRR or showIV ? fastEma : na, "Fast EMA", color=color.new(color.blue, 0), linewidth=1)
+plot(showTP or showRR or showIV ? slowEma : na, "Slow EMA", color=color.new(color.orange, 0), linewidth=1)
+
+// ================= 1. Trend Pullback Continuation =================
+distToFast = math.abs(close - fastEma)
+nearFast   = distToFast <= atrV * tpPullbackAtrMult
+rsiNeutral = rsiV >= tpRsiLow and rsiV <= tpRsiHigh
+uptrend    = fastEma > slowEma
+downtrend  = fastEma < slowEma
+
+tpBullish = uptrend and nearFast and rsiNeutral and close >= fastEma
+tpBearish = downtrend and nearFast and rsiNeutral and close <= fastEma
+
+tpStopLong   = close - tpStopAtrMult * atrV
+tpTargetLong = close + tpStopAtrMult * tpTargetRMult * atrV
+tpStopShort   = close + tpStopAtrMult * atrV
+tpTargetShort = close - tpStopAtrMult * tpTargetRMult * atrV
+
+plotshape(showTP and tpBullish ? low - atrV * 0.5 : na, title="TP Bullish", style=shape.triangleup, location=location.absolute, color=color.new(color.lime, 0), size=size.small)
+plotshape(showTP and tpBearish ? high + atrV * 0.5 : na, title="TP Bearish", style=shape.triangledown, location=location.absolute, color=color.new(color.red, 0), size=size.small)
+
+// ================= 2. Momentum Breakout =================
+donchianUpper = ta.highest(high, mbChannelLen)
+donchianLower = ta.lowest(low, mbChannelLen)
+priorUpper = donchianUpper[1]
+priorLower = donchianLower[1]
+volRatio   = volume / ta.sma(volume, mbVolLen)
+volConfirmed = volRatio >= mbVolMult
+
+mbBullish = close > priorUpper and volConfirmed
+mbBearish = close < priorLower and volConfirmed
+
+plotshape(showMB and mbBullish ? low - atrV * 0.5 : na, title="MB Breakout Up", style=shape.circle, location=location.absolute, color=color.new(color.aqua, 0), size=size.small)
+plotshape(showMB and mbBearish ? high + atrV * 0.5 : na, title="MB Breakdown", style=shape.circle, location=location.absolute, color=color.new(color.fuchsia, 0), size=size.small)
+plot(showMB ? donchianUpper : na, "Donchian Upper", color=color.new(color.gray, 40))
+plot(showMB ? donchianLower : na, "Donchian Lower", color=color.new(color.gray, 40))
+
+// ================= 3. Range / Support-Resistance Reversion =================
+bbMid   = ta.sma(close, rrBbLen)
+bbStdev = ta.stdev(close, rrBbLen)
+bbUpper = bbMid + rrBbStd * bbStdev
+bbLower = bbMid - rrBbStd * bbStdev
+trendEmaRR = ta.ema(close, rrTrendLen)
+slopeRR = (trendEmaRR - trendEmaRR[10]) / trendEmaRR[10]
+isRange = math.abs(slopeRR) <= rrFlatSlope
+
+rrTouchUpper = close >= bbUpper and isRange   // fade -> bearish credit spread thesis
+rrTouchLower = close <= bbLower and isRange   // fade -> bullish credit spread thesis
+
+plot(showRR ? bbUpper : na, "BB Upper", color=color.new(color.purple, 30))
+plot(showRR ? bbMid : na, "BB Mid", color=color.new(color.purple, 60))
+plot(showRR ? bbLower : na, "BB Lower", color=color.new(color.purple, 30))
+plotshape(showRR and rrTouchUpper ? bbUpper : na, title="RR Fade Upper", style=shape.xcross, location=location.absolute, color=color.new(color.red, 0), size=size.small)
+plotshape(showRR and rrTouchLower ? bbLower : na, title="RR Fade Lower", style=shape.xcross, location=location.absolute, color=color.new(color.lime, 0), size=size.small)
+bgcolor(showRR and isRange ? color.new(color.gray, 92) : na, title="Range regime")
+
+// ================= 4. IV Rank Premium Selling (realized-vol proxy) =================
+logRet = math.log(close / close[1])
+rv = ta.stdev(logRet, ivVolLen) * math.sqrt(252)
+ivRankProxy = ta.percentrank(rv, ivRankLen)
+trendEmaIV = ta.ema(close, rrTrendLen)
+slopeIV = (trendEmaIV - trendEmaIV[10]) / trendEmaIV[10]
+
+ivElevated = ivRankProxy >= ivThreshold
+ivUptrend   = ivElevated and slopeIV > rrFlatSlope
+ivDowntrend = ivElevated and slopeIV < -rrFlatSlope
+ivFlat      = ivElevated and math.abs(slopeIV) <= rrFlatSlope
+
+plotshape(showIV and ivUptrend ? low - atrV : na, title="IV Sell Put Spread", style=shape.labelup, location=location.absolute, color=color.new(color.green, 0), size=size.tiny, text="PCS")
+plotshape(showIV and ivDowntrend ? high + atrV : na, title="IV Sell Call Spread", style=shape.labeldown, location=location.absolute, color=color.new(color.maroon, 0), size=size.tiny, text="CCS")
+plotshape(showIV and ivFlat ? high + atrV * 1.5 : na, title="IV Sell Iron Condor", style=shape.labeldown, location=location.absolute, color=color.new(color.blue, 0), size=size.tiny, text="IC")
+
+// ================= Info panel =================
+var table infoTable = table.new(position.top_right, 2, 6, border_width=1)
+if barstate.islast
+    table.cell(infoTable, 0, 0, "IV Rank (proxy)", text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(infoTable, 1, 0, str.tostring(math.round(ivRankProxy, 1)), text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(infoTable, 0, 1, "Trend", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(infoTable, 1, 1, uptrend ? "Up" : downtrend ? "Down" : "Flat", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(infoTable, 0, 2, "RSI", text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(infoTable, 1, 2, str.tostring(math.round(rsiV, 1)), text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(infoTable, 0, 3, "Vol Ratio", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(infoTable, 1, 3, str.tostring(math.round(volRatio, 2)) + "x", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(infoTable, 0, 4, "Range regime", text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(infoTable, 1, 4, isRange ? "Yes" : "No", text_color=color.white, bgcolor=color.new(color.gray, 20))
+    table.cell(infoTable, 0, 5, "Mode", text_color=color.white, bgcolor=color.new(color.gray, 40))
+    table.cell(infoTable, 1, 5, strategyMode, text_color=color.white, bgcolor=color.new(color.gray, 40))
+
+// ================= Alerts =================
+alertcondition(tpBullish, title="Trend Pullback - Bullish", message="{{ticker}}: Trend Pullback bullish setup (long call idea)")
+alertcondition(tpBearish, title="Trend Pullback - Bearish", message="{{ticker}}: Trend Pullback bearish setup (long put idea)")
+alertcondition(mbBullish, title="Momentum Breakout - Up", message="{{ticker}}: Momentum breakout up (long call idea)")
+alertcondition(mbBearish, title="Momentum Breakout - Down", message="{{ticker}}: Momentum breakdown (long put idea)")
+alertcondition(rrTouchUpper, title="Range Reversion - Fade Upper", message="{{ticker}}: Range fade at upper band (call credit spread idea)")
+alertcondition(rrTouchLower, title="Range Reversion - Fade Lower", message="{{ticker}}: Range fade at lower band (put credit spread idea)")
+alertcondition(ivUptrend, title="IV Rank Premium - Sell Put Spread", message="{{ticker}}: IV Rank elevated, uptrend (put credit spread idea)")
+alertcondition(ivDowntrend, title="IV Rank Premium - Sell Call Spread", message="{{ticker}}: IV Rank elevated, downtrend (call credit spread idea)")
+alertcondition(ivFlat, title="IV Rank Premium - Sell Iron Condor", message="{{ticker}}: IV Rank elevated, range-bound (iron condor idea)")
+alertcondition(tpBullish or mbBullish or ivUptrend or rrTouchLower, title="Any Bullish Signal", message="{{ticker}}: Bullish signal fired")
+alertcondition(tpBearish or mbBearish or ivDowntrend or rrTouchUpper, title="Any Bearish Signal", message="{{ticker}}: Bearish signal fired")
