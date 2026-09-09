@@ -2,27 +2,30 @@
 // Multi-Strategy Options Signal Indicator
 // -----------------------------------------------------------------------
 // TradingView companion to the options_system Python package in this repo.
-// Mirrors the same four public/generic technical setups the Python
+// Mirrors the same five public/generic technical setups the Python
 // strategy modules implement (see options_system/strategies/*.py for the
 // full rationale + sources on each):
 //   1. Trend Pullback Continuation
 //   2. Momentum Breakout (volume-confirmed)
 //   3. Range / Support-Resistance Mean Reversion
 //   4. IV-Rank Premium Selling (realized-vol-rank proxy, tastytrade-style)
+//   5. Opening Range Breakout (0DTE) -- run this mode on an intraday chart
+//      (e.g. 5min); it's meaningless on a daily chart. See the ORB group's
+//      tooltip below.
 //
 // This indicator only plots signals and fires alerts -- it does not place
 // trades and cannot see the options chain (TradingView has no options data
 // for retail script access). For a concrete call/put/spread + strike/DTE
 // recommendation, run this repo's `python -m options_system.cli scan`
-// alongside it; use this script for live chart visualization and alerts
-// on the underlying.
+// (or `orb-backtest` for mode 5) alongside it; use this script for live
+// chart visualization and alerts on the underlying.
 // -----------------------------------------------------------------------
 indicator("Options System: Multi-Strategy Signals", overlay=true, max_labels_count=500)
 
 // ---------------- Strategy selector ----------------
 strategyMode = input.string(
-     "All", title="Strategy", options=["All", "Trend Pullback", "Momentum Breakout", "Range Reversion", "IV Rank Premium"],
-     group="Strategy Selection", tooltip="Choose which strategy's signals to plot. 'All' overlays every strategy at once.")
+     "All", title="Strategy", options=["All", "Trend Pullback", "Momentum Breakout", "Range Reversion", "IV Rank Premium", "Opening Range Breakout"],
+     group="Strategy Selection", tooltip="Choose which strategy's signals to plot. 'All' overlays every non-intraday strategy (ORB is excluded from 'All' -- select it explicitly on an intraday chart).")
 
 // ---------------- Shared indicator settings ----------------
 grpShared = "Shared Indicators"
@@ -58,16 +61,23 @@ ivVolLen     = input.int(20, "Realized-vol length", group=grpIV)
 ivRankLen    = input.int(252, "IV-rank proxy lookback (bars)", group=grpIV)
 ivThreshold  = input.float(50, "IV Rank proxy threshold", group=grpIV)
 
+// ---------------- Opening Range Breakout settings ----------------
+grpORB = "Opening Range Breakout (0DTE)"
+orbBars      = input.int(3, "Opening range length (bars)", group=grpORB, tooltip="Number of bars from the session open that define the opening range. E.g. 3 bars on a 5min chart = 15 minutes. This mode is only meaningful on an intraday chart -- it does nothing useful on a daily chart.")
+orbVolMult   = input.float(1.2, "Volume confirmation multiple", group=grpORB)
+orbTargetRMult = input.float(1.5, "Target R multiple (x range width)", group=grpORB)
+
 // ================= Shared indicators =================
 fastEma = ta.ema(close, fastLen)
 slowEma = ta.ema(close, slowLen)
 rsiV    = ta.rsi(close, rsiLen)
 atrV    = ta.atr(atrLen)
 
-showTP = strategyMode == "All" or strategyMode == "Trend Pullback"
-showMB = strategyMode == "All" or strategyMode == "Momentum Breakout"
-showRR = strategyMode == "All" or strategyMode == "Range Reversion"
-showIV = strategyMode == "All" or strategyMode == "IV Rank Premium"
+showTP  = strategyMode == "All" or strategyMode == "Trend Pullback"
+showMB  = strategyMode == "All" or strategyMode == "Momentum Breakout"
+showRR  = strategyMode == "All" or strategyMode == "Range Reversion"
+showIV  = strategyMode == "All" or strategyMode == "IV Rank Premium"
+showORB = strategyMode == "Opening Range Breakout"  // deliberately excluded from "All" -- see tooltip above
 
 plot(showTP or showRR or showIV ? fastEma : na, "Fast EMA", color=color.new(color.blue, 0), linewidth=1)
 plot(showTP or showRR or showIV ? slowEma : na, "Slow EMA", color=color.new(color.orange, 0), linewidth=1)
@@ -141,8 +151,53 @@ plotshape(showIV and ivUptrend ? low - atrV : na, title="IV Sell Put Spread", st
 plotshape(showIV and ivDowntrend ? high + atrV : na, title="IV Sell Call Spread", style=shape.labeldown, location=location.absolute, color=color.new(color.maroon, 0), size=size.tiny, text="CCS")
 plotshape(showIV and ivFlat ? high + atrV * 1.5 : na, title="IV Sell Iron Condor", style=shape.labeldown, location=location.absolute, color=color.new(color.blue, 0), size=size.tiny, text="IC")
 
+// ================= 5. Opening Range Breakout (0DTE, intraday) =================
+// Defines the opening range from the first `orbBars` bars of each session,
+// then trades the first breakout of that range (volume-confirmed) -- same
+// public/generic concept as options_system/strategies/opening_range_breakout.py.
+newDay = ta.change(time("D")) != 0
+
+var float orHigh = na
+var float orLow = na
+var float orVolSum = na
+var int orBarCount = 0
+var bool orbFiredToday = false
+
+if newDay
+    orHigh := high
+    orLow := low
+    orVolSum := volume
+    orBarCount := 1
+    orbFiredToday := false
+else if orBarCount < orbBars
+    orHigh := math.max(orHigh, high)
+    orLow := math.min(orLow, low)
+    orVolSum := orVolSum + volume
+    orBarCount := orBarCount + 1
+
+orComplete = orBarCount >= orbBars
+orAvgVol = orVolSum / math.max(orBarCount, 1)
+orbVolConfirmed = volume >= orbVolMult * orAvgVol
+
+orbBullishRaw = showORB and orComplete and not orbFiredToday and close > orHigh and orbVolConfirmed
+orbBearishRaw = showORB and orComplete and not orbFiredToday and close < orLow and orbVolConfirmed
+
+if orbBullishRaw or orbBearishRaw
+    orbFiredToday := true
+
+orbRangeWidth = orHigh - orLow
+orbStopLong   = orLow
+orbTargetLong = close + orbTargetRMult * orbRangeWidth
+orbStopShort   = orHigh
+orbTargetShort = close - orbTargetRMult * orbRangeWidth
+
+plot(showORB ? orHigh : na, "ORB High", color=color.new(color.teal, 20), style=plot.style_stepline)
+plot(showORB ? orLow : na, "ORB Low", color=color.new(color.maroon, 20), style=plot.style_stepline)
+plotshape(orbBullishRaw ? low - atrV * 0.5 : na, title="ORB Breakout Up", style=shape.triangleup, location=location.absolute, color=color.new(color.yellow, 0), size=size.small, text="ORB")
+plotshape(orbBearishRaw ? high + atrV * 0.5 : na, title="ORB Breakdown", style=shape.triangledown, location=location.absolute, color=color.new(color.orange, 0), size=size.small, text="ORB")
+
 // ================= Info panel =================
-var table infoTable = table.new(position.top_right, 2, 6, border_width=1)
+var table infoTable = table.new(position.top_right, 2, 7, border_width=1)
 if barstate.islast
     table.cell(infoTable, 0, 0, "IV Rank (proxy)", text_color=color.white, bgcolor=color.new(color.gray, 20))
     table.cell(infoTable, 1, 0, str.tostring(math.round(ivRankProxy, 1)), text_color=color.white, bgcolor=color.new(color.gray, 20))
@@ -156,6 +211,9 @@ if barstate.islast
     table.cell(infoTable, 1, 4, isRange ? "Yes" : "No", text_color=color.white, bgcolor=color.new(color.gray, 20))
     table.cell(infoTable, 0, 5, "Mode", text_color=color.white, bgcolor=color.new(color.gray, 40))
     table.cell(infoTable, 1, 5, strategyMode, text_color=color.white, bgcolor=color.new(color.gray, 40))
+    if showORB
+        table.cell(infoTable, 0, 6, "ORB range", text_color=color.white, bgcolor=color.new(color.gray, 20))
+        table.cell(infoTable, 1, 6, orComplete ? str.tostring(math.round(orLow, 2)) + " - " + str.tostring(math.round(orHigh, 2)) : "forming...", text_color=color.white, bgcolor=color.new(color.gray, 20))
 
 // ================= Alerts =================
 alertcondition(tpBullish, title="Trend Pullback - Bullish", message="{{ticker}}: Trend Pullback bullish setup (long call idea)")
@@ -167,5 +225,7 @@ alertcondition(rrTouchLower, title="Range Reversion - Fade Lower", message="{{ti
 alertcondition(ivUptrend, title="IV Rank Premium - Sell Put Spread", message="{{ticker}}: IV Rank elevated, uptrend (put credit spread idea)")
 alertcondition(ivDowntrend, title="IV Rank Premium - Sell Call Spread", message="{{ticker}}: IV Rank elevated, downtrend (call credit spread idea)")
 alertcondition(ivFlat, title="IV Rank Premium - Sell Iron Condor", message="{{ticker}}: IV Rank elevated, range-bound (iron condor idea)")
-alertcondition(tpBullish or mbBullish or ivUptrend or rrTouchLower, title="Any Bullish Signal", message="{{ticker}}: Bullish signal fired")
-alertcondition(tpBearish or mbBearish or ivDowntrend or rrTouchUpper, title="Any Bearish Signal", message="{{ticker}}: Bearish signal fired")
+alertcondition(orbBullishRaw, title="ORB - Breakout Up", message="{{ticker}}: Opening range breakout up (same-day/0DTE long call idea)")
+alertcondition(orbBearishRaw, title="ORB - Breakdown", message="{{ticker}}: Opening range breakdown (same-day/0DTE long put idea)")
+alertcondition(tpBullish or mbBullish or ivUptrend or rrTouchLower or orbBullishRaw, title="Any Bullish Signal", message="{{ticker}}: Bullish signal fired")
+alertcondition(tpBearish or mbBearish or ivDowntrend or rrTouchUpper or orbBearishRaw, title="Any Bearish Signal", message="{{ticker}}: Bearish signal fired")

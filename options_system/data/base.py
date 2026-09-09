@@ -38,6 +38,18 @@ class PriceDataProvider(ABC):
         df = self.get_history(ticker, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d"))
         return df.tail(lookback_days)
 
+    def get_intraday_history(
+        self, ticker: str, start: str, end: str, bar_minutes: int = 5
+    ) -> pd.DataFrame:
+        """Minute-level OHLCV bars, for intraday-only strategies (e.g. Opening
+        Range Breakout). Not every provider supports this -- override where
+        it does. Same required columns as get_history; index is a
+        DatetimeIndex with intraday timestamps instead of one row per day.
+        """
+        raise NotImplementedError(
+            f"{type(self).__name__} does not support intraday history"
+        )
+
 
 def validate_ohlcv(df: pd.DataFrame, ticker: str) -> pd.DataFrame:
     required = {"open", "high", "low", "close", "volume"}

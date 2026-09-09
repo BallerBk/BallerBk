@@ -80,6 +80,48 @@ class SyntheticProvider(PriceDataProvider):
         )
         return validate_ohlcv(df, ticker)
 
+    def get_intraday_history(
+        self, ticker: str, start: str, end: str, bar_minutes: int = 5, session_minutes: int = 390
+    ) -> pd.DataFrame:
+        """Synthetic minute-level bars, for validating the Opening Range
+        Breakout strategy without real intraday market data. Each trading
+        day starts from a small gap off the prior day's close, then walks a
+        finer-grained random walk through the ~390-minute regular session.
+        """
+        rng = np.random.default_rng(self._seed_for(f"{ticker}-intraday"))
+        trading_days = pd.bdate_range(start=start, end=end)
+        bars_per_day = max(1, session_minutes // bar_minutes)
+        daily_vol = self.annual_vol / np.sqrt(252)
+        per_bar_vol = daily_vol * np.sqrt(bar_minutes / session_minutes)
+
+        rows = []
+        price = self.start_price
+        for day in trading_days:
+            gap_shock = rng.normal(0, daily_vol * 0.3)
+            price = price * np.exp(gap_shock)
+            day_open = day.normalize() + pd.Timedelta(hours=9, minutes=30)
+            for i in range(bars_per_day):
+                ts = day_open + pd.Timedelta(minutes=bar_minutes * i)
+                shock = rng.normal(0, per_bar_vol)
+                new_price = price * np.exp(shock)
+                o, c = price, new_price
+                noise = abs(c - o) * rng.uniform(0.2, 0.8) + price * per_bar_vol * 0.3
+                h = max(o, c) + noise * rng.uniform(0, 0.5)
+                l = min(o, c) - noise * rng.uniform(0, 0.5)
+                vol = rng.integers(20_000, 300_000)
+                rows.append(
+                    {"timestamp": ts, "open": o, "high": h, "low": l, "close": c, "volume": vol}
+                )
+                price = new_price
+
+        if not rows:
+            df = pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+            df.index = pd.DatetimeIndex([], name="timestamp")
+            return validate_ohlcv(df, ticker)
+
+        df = pd.DataFrame(rows).set_index("timestamp")
+        return validate_ohlcv(df, ticker)
+
     def _seed_for(self, ticker: str) -> int:
         if self.seed is None:
             return np.random.randint(0, 2**31 - 1)

@@ -15,6 +15,9 @@ universe:
   - ORCL
 
 # Any subset/order of: trend_pullback, momentum_breakout, range_reversion, iv_rank_premium
+# (NOT "orb" -- Opening Range Breakout is intraday/0DTE and runs via its own
+# command: `python -m options_system.cli orb-backtest`. It's excluded from
+# this list on purpose since `backtest`/`scan` only handle daily bars.)
 strategies:
   - trend_pullback
   - momentum_breakout

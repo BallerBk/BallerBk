@@ -71,14 +71,18 @@ def test_credit_spread_max_profit_loss_ratio_is_realistic():
 
 
 def test_rank_strategies_orders_by_expectancy_weighted_by_sample_size():
+    # ORB is intraday-only and never fires against daily bars (see
+    # test_strategies.py::test_orb_never_fires_on_daily_bars) -- excluded
+    # here since this engine only handles daily bars.
+    daily_keys = [k for k in REGISTRY.keys() if not REGISTRY.get(k).intraday]
     provider = SyntheticProvider(seed=16, regime="mixed")
-    strategies = [REGISTRY.get(k)() for k in REGISTRY.keys()]
+    strategies = [REGISTRY.get(k)() for k in daily_keys]
     trades = backtest_universe(
         ["SPY", "AAPL"], provider, strategies, "2019-01-01", "2024-01-01", ContractSelector()
     )
     ranked = rank_strategies(trades)
     assert list(ranked.columns[:2]) == ["strategy", "num_trades"]
-    assert len(ranked) == len(REGISTRY.keys())
+    assert len(ranked) == len(daily_keys)
 
 
 def test_summarize_empty_trades_returns_empty_frame_not_crash():

@@ -42,6 +42,11 @@ class Strategy(ABC):
     #: one of: "long_call"/"long_put" (debit, directional), "credit_spread" (defined-risk
     #: premium selling), "iron_condor" (range-bound premium selling)
     default_structure: str = "long_call"
+    #: True for strategies that require intraday (minute-level) bars and
+    #: same-day exits, e.g. Opening Range Breakout. These are NOT run through
+    #: the daily-bar backtest engine or the once-daily scanner -- see
+    #: backtest/orb_engine.py and cli.py's separate `orb-backtest` command.
+    intraday: bool = False
 
     def __init__(self, **params):
         self.params = params

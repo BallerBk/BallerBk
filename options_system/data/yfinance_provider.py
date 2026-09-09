@@ -37,3 +37,29 @@ class YFinanceProvider(PriceDataProvider):
             raw.columns = raw.columns.get_level_values(0)
         raw = raw.rename(columns=str.lower)
         return validate_ohlcv(raw[["open", "high", "low", "close", "volume"]], ticker)
+
+    def get_intraday_history(
+        self, ticker: str, start: str, end: str, bar_minutes: int = 5
+    ) -> pd.DataFrame:
+        """Intraday bars via yfinance. NOTE Yahoo's own limits, not ours:
+        1-minute bars only cover the trailing ~7 days; 5/15/30-minute bars
+        cover roughly the trailing ~60 days. Requesting a wider [start, end]
+        than that will silently return less than you asked for -- yfinance
+        doesn't error, it just truncates. Fine for validating/tuning ORB
+        recently; not a source of years of intraday history.
+        """
+        import yfinance as yf
+
+        interval = f"{bar_minutes}m"
+        raw = yf.download(
+            ticker, start=start, end=end, interval=interval, progress=False, auto_adjust=True
+        )
+        if raw.empty:
+            raise ValueError(
+                f"yfinance returned no intraday data for {ticker} in [{start}, {end}] "
+                f"at {interval} -- note Yahoo's ~7/60 day lookback limits on intraday intervals."
+            )
+        if isinstance(raw.columns, pd.MultiIndex):
+            raw.columns = raw.columns.get_level_values(0)
+        raw = raw.rename(columns=str.lower)
+        return validate_ohlcv(raw[["open", "high", "low", "close", "volume"]], ticker)
